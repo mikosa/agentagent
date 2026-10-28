@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-controller"
+version = "0.1.0"
+description = "Local durable controller for Codex sessions"
+requires-python = ">=3.12"
+dependencies = ["jsonschema>=4.23"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+ui = ["nicegui>=3.5"]
+
+[project.scripts]
+agent-controller = "app.main:main"
+agent-controller-nicegui = "app.nicegui_main:main"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

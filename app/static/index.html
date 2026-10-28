@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Controller</title>
+  <style>
+    :root { color-scheme: dark; --bg:#10191d; --panel:#18252a; --surface:#203137; --line:#385059; --text:#f2f6f4; --muted:#b1c4c5; --accent:#a5e0bf; --danger:#ff927d; --warn:#e9c17c; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,sans-serif; }
+    button,input,textarea,select { font:inherit; }
+    button { cursor:pointer; border:1px solid var(--line); background:var(--surface); color:var(--text); border-radius:8px; padding:8px 13px; }
+    button:hover { background:#2b4349; }
+    button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    button.primary { background:var(--accent); border-color:var(--accent); color:#10251a; font-weight:700; }
+    button.danger { color:var(--danger); border-color:#805b58; }
+    input,textarea,select { width:100%; border:1px solid var(--line); border-radius:8px; background:#102026; color:var(--text); padding:9px 11px; }
+    textarea { resize:vertical; min-height:72px; }
+    label { display:block; color:var(--muted); font-size:13px; margin-bottom:5px; }
+    header { display:flex; align-items:center; gap:15px; justify-content:space-between; padding:14px 22px; border-bottom:1px solid var(--line); background:#142126; }
+    h1 { margin:0; font-size:19px; letter-spacing:-.02em; }
+    h2 { margin:0 0 14px; font-size:16px; }
+    h3 { margin:0 0 7px; font-size:14px; }
+    .brand { display:flex; align-items:center; gap:12px; }
+    .mark { width:22px; height:22px; border:2px solid var(--accent); border-radius:6px; transform:rotate(45deg); }
+    .header-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .status { color:var(--accent); font-weight:650; font-size:13px; }
+    .status.paused { color:var(--warn); }
+    .counts { color:var(--muted); font-size:12px; }
+    main { display:grid; grid-template-columns:minmax(290px,35%) minmax(0,1fr); min-height:calc(100vh - 67px); }
+    .left { border-right:1px solid var(--line); padding:18px; min-width:0; }
+    .right { padding:22px; min-width:0; }
+    .section-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px; }
+    .graph { width:100%; height:310px; border:1px solid var(--line); background:#132228; border-radius:12px; margin-bottom:16px; }
+    .graph.empty-graph { height:140px; }
+    .graph text { fill:var(--text); font-size:11px; pointer-events:none; }
+    .graph circle { cursor:pointer; stroke-width:2; }
+    .graph circle:hover { stroke:var(--text); }
+    .list { display:flex; flex-direction:column; gap:5px; max-height:340px; overflow:auto; }
+    .session-row { text-align:left; width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .session-row.active { border-color:var(--accent); background:#264437; }
+    .session-row small { color:var(--muted); }
+    .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent); margin-right:8px; }
+    .dot.running { background:var(--warn); } .dot.held,.dot.failed { background:var(--danger); }
+    .new-session { margin-top:18px; border-top:1px solid var(--line); padding-top:18px; }
+    .new-session summary { font-weight:700; font-size:16px; margin-bottom:12px; color:var(--text); }
+    .field { margin-bottom:11px; }
+    .inspector-head { display:flex; align-items:flex-start; justify-content:space-between; gap:15px; margin-bottom:18px; }
+    .inspector-head h2 { font-size:23px; margin-bottom:4px; }
+    .subtle { color:var(--muted); font-size:13px; }
+    .inspector-actions { display:flex; flex-wrap:wrap; gap:7px; justify-content:flex-end; }
+    .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); overflow:auto; margin-bottom:18px; }
+    .tabs button { border:0; background:transparent; border-radius:0; color:var(--muted); padding:10px 13px; white-space:nowrap; }
+    .tabs button.active { color:var(--accent); box-shadow:inset 0 -2px var(--accent); }
+    .panel { max-width:900px; }
+    .timeline { display:flex; flex-direction:column; gap:12px; max-height:calc(100vh - 340px); overflow:auto; padding-right:6px; }
+    .entry { background:var(--panel); border-radius:10px; padding:12px 15px; }
+    .entry.user { background:#294237; }
+    .entry .meta { color:var(--muted); font-size:11px; margin-bottom:6px; display:flex; justify-content:space-between; gap:10px; }
+    .entry pre,details pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:0; font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .entry p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+    details { border-top:1px solid var(--line); margin-top:9px; padding-top:7px; }
+    summary { cursor:pointer; color:var(--muted); }
+    .composer { display:flex; gap:9px; margin-top:16px; align-items:flex-end; }
+    .composer textarea { flex:1; }
+    .empty { padding:24px; color:var(--muted); border:1px dashed var(--line); border-radius:10px; }
+    .kv { display:grid; grid-template-columns:170px minmax(0,1fr); gap:8px 16px; margin:0; }
+    .kv dt { color:var(--muted); } .kv dd { margin:0; overflow-wrap:anywhere; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+    .row > * { flex:1; min-width:130px; }
+    .row button { flex:0 0 auto; min-width:0; }
+    .small-list { display:flex; flex-direction:column; gap:8px; }
+    .small-list article { background:var(--panel); padding:11px 13px; border-radius:8px; overflow-wrap:anywhere; }
+    .toast { position:fixed; bottom:18px; right:18px; background:#5c302f; padding:11px 15px; border-radius:8px; max-width:360px; display:none; }
+    @media (max-width:850px) { main { grid-template-columns:1fr; } .left { border-right:0; border-bottom:1px solid var(--line); } .graph { height:220px; } .right { padding:18px; } .timeline { max-height:none; } }
+    @media (max-width:560px) { header { align-items:flex-start; flex-direction:column; } .inspector-head { flex-direction:column; } .inspector-actions { justify-content:flex-start; } .kv { grid-template-columns:1fr; gap:2px; } .kv dd { margin-bottom:10px; } }
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand"><div class="mark" aria-hidden="true"></div><h1>Agent Controller</h1></div>
+  <div class="header-actions"><span id="status" class="status">Connecting</span><span id="counts" class="counts"></span><time id="clock" class="counts"></time><button id="pause">Pause New Prompts</button><button id="stop-all" class="danger">Stop All Running</button></div>
+</header>
+<main>
+  <aside class="left">
+    <div class="section-head"><h2>Session graph</h2><span id="node-count" class="subtle"></span></div>
+    <div class="row"><select id="edge-filter" aria-label="Filter relationships"><option value="all">All relationships</option><option>PARENT_OF</option><option>SIBLING_OF</option><option>DEPENDS_ON</option><option>RELATED_TO</option><option>FORKED_FROM</option></select><button id="zoom-in" type="button" aria-label="Zoom in">+</button><button id="zoom-out" type="button" aria-label="Zoom out">−</button><button id="zoom-reset" type="button">Reset view</button></div>
+    <svg id="graph" class="graph" viewBox="0 0 500 310" role="img" aria-label="Session relationship graph"></svg>
+    <div class="field"><label for="search">Find a session</label><input id="search" type="search" placeholder="Search by title or status"></div>
+    <div id="session-list" class="list"></div>
+    <details class="new-session"><summary>Create session</summary><form id="new-session"><div class="field"><label for="new-title">Title</label><input id="new-title" required></div><div class="field"><label for="new-objective">Objective</label><textarea id="new-objective" required></textarea></div><div class="field"><label for="new-cwd">Working directory</label><input id="new-cwd" required placeholder="/absolute/project/path"></div><button class="primary">Create session</button></form></details>
+  </aside>
+  <section class="right"><div id="inspector" class="empty">Create or select a session to inspect its work.</div></section>
+</main>
+<div id="toast" class="toast" role="alert"></div>
+<script>
+const state = {sessions:[], edges:[], selected:null, tab:'Chat', status:null, connected:false, history:{}};
+const $ = id => document.getElementById(id);
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let renderGeneration=0;
+let graphSignature='';
+let graphView={x:0,y:0,w:500,h:310};
+function applyGraphView(){ $('graph').setAttribute('viewBox',`${graphView.x} ${graphView.y} ${graphView.w} ${graphView.h}`); }
+function zoomGraph(factor){const nextW=Math.max(180,Math.min(1000,graphView.w*factor)),nextH=nextW*310/500;graphView.x+=(graphView.w-nextW)/2;graphView.y+=(graphView.h-nextH)/2;graphView.w=nextW;graphView.h=nextH;applyGraphView();}
+function setContent(element, html) {
+  if (element.dataset.html===html) return;
+  const previous=element.querySelector('.timeline'), scroll=previous?.scrollTop||0;
+  const open=[...element.querySelectorAll('details')].map((d,i)=>d.open?i:-1).filter(i=>i>=0);
+  const focus=document.activeElement, focusId=element.contains(focus)?focus.id:null;
+  const focusValue=focusId?focus.value:undefined, focusChecked=focusId&&focus.type==='checkbox'?focus.checked:undefined;
+  const draft=element.querySelector('#prompt')?.value;
+  const selection=focusId&&typeof focus.selectionStart==='number'?[focus.selectionStart,focus.selectionEnd]:null;
+  element.innerHTML=html; element.dataset.html=html;
+  if (draft!==undefined && element.querySelector('#prompt')) element.querySelector('#prompt').value=draft;
+  open.forEach(i=>{const detail=element.querySelectorAll('details')[i];if(detail)detail.open=true;});
+  if (element.querySelector('.timeline')) element.querySelector('.timeline').scrollTop=scroll;
+  if(focusId && element.querySelector('#'+focusId)){const restored=element.querySelector('#'+focusId);if(focusValue!==undefined)restored.value=focusValue;if(focusChecked!==undefined)restored.checked=focusChecked;restored.focus();if(selection)restored.setSelectionRange(...selection);}
+}
+function itemMarkup(item) {
+  const p=item.payload||{};
+  if(item.type==='agentMessage'&&typeof p.text==='string')return `<p>${escapeHtml(p.text)}</p>`;
+  const label=p.command?`${item.type}: ${p.command}`:item.type;
+  const body=p.aggregatedOutput||p.output||p.delta||JSON.stringify(p,null,2);
+  return `<details><summary>${escapeHtml(label)}</summary><pre>${escapeHtml(body)}</pre></details>`;
+}
+function reflectionMarkup(reflection) {
+  if(!reflection)return '';
+  const stop=reflection.status==='running'?`<button data-stop-reflection="${reflection.id}">Stop reflection</button>`:'';
+  const retry=['failed','interrupt_failed'].includes(reflection.status)?`<button data-retry-reflection="${reflection.id}">Retry reflection</button>`:'';
+  return `<details><summary>Reflection · ${escapeHtml(reflection.status)}</summary><pre>${escapeHtml(reflection.analysis||'Pending')}</pre><h3>Reflection transcript</h3>${(reflection.items||[]).map(itemMarkup).join('')}${stop}${retry}</details>`;
+}
+async function api(path, method='GET', body) {
+  const response = await fetch(path, {method, headers:{'Content-Type':'application/json'}, body:body === undefined ? undefined : JSON.stringify(body)});
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  return data;
+}
+function error(message) { const toast=$('toast'); toast.textContent=message; toast.style.display='block'; setTimeout(()=>toast.style.display='none',5000); }
+async function action(path, method='POST', body) { try { await api(path,method,body); await refresh(); } catch(e) { error(e.message); } }
+function selected() { return state.sessions.find(s=>s.id===state.selected); }
+function renderHeader() {
+  const s=state.status; if (!state.connected){$('status').textContent='Disconnected';$('status').className='status paused';$('counts').textContent='Check the local service';$('pause').disabled=true;$('stop-all').disabled=true;$('new-session').querySelector('button').disabled=true;return;} if (!s) return;
+  $('pause').disabled=false;$('stop-all').disabled=false;$('new-session').querySelector('button').disabled=false;
+  $('status').textContent=s.paused?'Dispatch paused':'Dispatch running'; $('status').className='status'+(s.paused?' paused':'');
+  $('counts').textContent=`${s.running} running · ${s.reflecting} reflecting · ${s.queued} queued · ${s.pending_requests} requests · ${s.unread_updates} updates · ${s.held} held · ${s.failures} failed`;
+  $('pause').textContent=s.paused?'Resume Dispatch':'Pause New Prompts';
+}
+function renderGraph() {
+  const signature=JSON.stringify([state.sessions.map(s=>[s.id,s.title,s.status,s.held]),state.edges,state.selected]);
+  if(signature===graphSignature)return;graphSignature=signature;
+  const svg=$('graph'); svg.replaceChildren(); svg.classList.toggle('empty-graph',!state.sessions.length); $('node-count').textContent=`${state.sessions.length} sessions`;
+  const sessions=state.sessions, positions={};
+  sessions.forEach((s,i)=>{const angle=2*Math.PI*i/Math.max(sessions.length,1)-Math.PI/2; positions[s.id]=[250+Math.cos(angle)*175,155+Math.sin(angle)*105];});
+  const create=(name,attrs)=>{const el=document.createElementNS('http://www.w3.org/2000/svg',name); Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v)); svg.appendChild(el); return el;};
+  if(!sessions.length){const label=create('text',{x:250,y:156,'text-anchor':'middle'});label.textContent='Create a session to begin the graph';return;}
+  state.edges.filter(e=>$('edge-filter').value==='all'||e.type===$('edge-filter').value).forEach(e=>{const a=positions[e.source_id],b=positions[e.target_id]; if(!a||!b)return; const line=create('line',{x1:a[0],y1:a[1],x2:b[0],y2:b[1],stroke:e.type==='PARENT_OF'?'#a5e0bf':'#67838a','stroke-width':e.type==='PARENT_OF'?2:1.5}); line.style.cursor='pointer';line.addEventListener('click',()=>error(`${e.type}: ${state.sessions.find(s=>s.id===e.source_id)?.title} → ${state.sessions.find(s=>s.id===e.target_id)?.title}`)); const title=document.createElementNS('http://www.w3.org/2000/svg','title'); title.textContent=e.type; line.appendChild(title);});
+  sessions.forEach(s=>{const [x,y]=positions[s.id]; const circle=create('circle',{cx:x,cy:y,r:s.id===state.selected?13:10,fill:s.status==='running'?'#e9c17c':s.held?'#ff927d':'#a5e0bf',stroke:s.id===state.selected?'#fff':'#142126',tabindex:0,role:'button','aria-label':`Open ${s.title}`}); const choose=()=>{state.selected=s.id; state.tab='Chat'; render();if(window.innerWidth<850)$('inspector').scrollIntoView({behavior:'smooth'});};circle.addEventListener('click',choose);circle.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();choose();}}); const label=create('text',{x,y:y+27,'text-anchor':'middle'}); label.textContent=s.title.length>17?s.title.slice(0,16)+'…':s.title;});
+}
+function renderList(){ const filter=$('search').value.toLowerCase(); const list=$('session-list'); list.innerHTML=''; state.sessions.filter(s=>(s.title+' '+s.status).toLowerCase().includes(filter)).forEach(s=>{const b=document.createElement('button'); b.className='session-row'+(s.id===state.selected?' active':''); b.innerHTML=`<span><span class="dot ${escapeHtml(s.status)}"></span>${escapeHtml(s.title)}</span><small>${escapeHtml(s.status)}</small>`; b.onclick=()=>{state.selected=s.id; state.tab='Chat';render();if(window.innerWidth<850)$('inspector').scrollIntoView({behavior:'smooth'});}; list.appendChild(b);}); if(!list.children.length) list.innerHTML='<div class="empty">No matching sessions.</div>'; }
+async function renderInspector(){ const generation=++renderGeneration,s=selected(),tab=state.tab,root=$('inspector'); if(!s){root.className='empty';root.textContent='Create or select a session to inspect its work.';root.dataset.session='';return;} root.className='';
+  if(root.dataset.session!==s.id||root.dataset.tab!==tab){root.innerHTML=`<div class="inspector-head"><div><h2>${escapeHtml(s.title)}</h2><div class="subtle">${escapeHtml(s.status)} · ${escapeHtml(s.id)}</div></div><div class="inspector-actions"><button id="hold">${s.held?'Resume Session':'Hold Session'}</button><button id="stop-turn" class="danger">Stop Turn</button><button id="archive">Archive</button></div></div><div class="tabs" role="tablist">${['Chat','Overview','Schedule','Activity','Requests','Logs'].map(t=>`<button role="tab" data-tab="${t}" class="${tab===t?'active':''}">${t}</button>`).join('')}</div><div id="tab-content" class="panel"></div>`;root.dataset.session=s.id;root.dataset.tab=tab;}
+  root.querySelector('h2').textContent=s.title;
+  root.querySelector('.inspector-head .subtle').textContent=`${s.status} · ${s.id}`;
+  $('hold').textContent=s.held?'Resume Session':'Hold Session';
+  root.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;renderInspector();});
+  $('hold').onclick=()=>action(`/api/sessions/${s.id}/${s.held?'resume':'hold'}`);
+  $('hold').disabled=s.status==='archived';$('archive').disabled=s.status==='archived'||s.status==='running';
+  $('archive').onclick=()=>action(`/api/sessions/${s.id}/archive`);
+  const [page,reflections]=await Promise.all([api(`/api/sessions/${s.id}/turns-page?limit=50`),api(`/api/sessions/${s.id}/reflections`)]);
+  const history=state.history[s.id]||(state.history[s.id]={byId:{},next_cursor:null,initialized:false,all_loaded:false});
+  page.data.forEach(t=>history.byId[t.id]=t);
+  if(!history.initialized||(!history.all_loaded&&history.next_cursor===null))history.next_cursor=page.next_cursor;
+  history.initialized=true;
+  const turns=Object.values(history.byId).sort((a,b)=>a.cursor-b.cursor);
+  const active=turns.find(t=>t.status==='running'||t.status==='interrupt_requested');
+  if(generation!==renderGeneration)return;
+  if(active?.status==='interrupt_requested')root.querySelector('.inspector-head .subtle').textContent=`Stopping · ${s.id}`;
+  $('stop-turn').disabled=!active; $('stop-turn').onclick=()=>active&&action(`/api/turns/${active.id}/stop`);
+  const content=$('tab-content');
+  if(state.tab==='Chat') {
+    const queue=await api(`/api/sessions/${s.id}/queue`);
+    if(generation!==renderGeneration)return;
+    setContent(content,`${history.next_cursor?'<button id="load-older">Load older turns</button>':''}<div class="timeline">${turns.length?turns.map(t=>{const work=queue.find(w=>w.id===t.work_item_id),reflection=reflections.find(r=>r.worker_turn_id===t.id);return `<article class="entry user"><div class="meta"><span>${escapeHtml(work?.source||'prompt')}</span><time>${escapeHtml(t.started_at||'')}</time></div><p>${escapeHtml(work?.payload||'')}</p></article><article class="entry"><div class="meta"><span>Codex · ${escapeHtml(t.status)}</span><time>${escapeHtml(t.finished_at||'')}</time></div>${t.items.length?t.items.map(itemMarkup).join(''):'<p class="subtle">Waiting for output</p>'}${reflectionMarkup(reflection)}${['failed','interrupted'].includes(t.status)?`<button data-retry="${t.id}">Retry as new turn</button>`:''}</article>`}).join(''):'<div class="empty">No turns yet. Send the first prompt below.</div>'}</div><form id="composer" class="composer"><textarea id="prompt" aria-label="Prompt" placeholder="Send a prompt to this session" required></textarea><button class="primary">Send</button></form>`);
+    $('composer').onsubmit=async e=>{e.preventDefault(); const prompt=$('prompt').value.trim(); if(!prompt)return; await action(`/api/sessions/${s.id}/prompts`,'POST',{prompt});};
+    if(history.next_cursor)$('load-older').onclick=async()=>{try{const older=await api(`/api/sessions/${s.id}/turns-page?limit=50&before=${history.next_cursor}`);older.data.forEach(t=>history.byId[t.id]=t);history.next_cursor=older.next_cursor;history.all_loaded=!older.next_cursor;renderInspector();}catch(e){error(e.message);}};
+    content.querySelectorAll('[data-retry]').forEach(b=>b.onclick=()=>action(`/api/turns/${b.dataset.retry}/retry`));
+    content.querySelectorAll('[data-stop-reflection]').forEach(b=>b.onclick=()=>action(`/api/reflections/${b.dataset.stopReflection}/stop`));
+    content.querySelectorAll('[data-retry-reflection]').forEach(b=>b.onclick=()=>action(`/api/reflections/${b.dataset.retryReflection}/retry`));
+  } else if(state.tab==='Overview') {
+    const neighbors=await api(`/api/sessions/${s.id}/neighbors`);
+    if(generation!==renderGeneration)return;
+    setContent(content,`<dl class="kv"><dt>Objective</dt><dd>${escapeHtml(s.objective)}</dd><dt>Scope</dt><dd>${escapeHtml(s.scope)}</dd><dt>Summary</dt><dd>${escapeHtml(s.summary||'No reflection yet')}</dd><dt>Codex thread</dt><dd>${escapeHtml(s.thread_id)}</dd><dt>Working directory</dt><dd>${escapeHtml(s.cwd)}</dd><dt>Context tokens</dt><dd>${s.context_tokens}</dd><dt>Neighbors</dt><dd>${neighbors.map(n=>escapeHtml(n.title)).join(', ')||'None'}</dd></dl><h3 style="margin-top:22px">Relationships</h3><div class="small-list">${state.edges.filter(e=>e.source_id===s.id||e.target_id===s.id).map(e=>`<article>${escapeHtml(e.type)} · ${escapeHtml(state.sessions.find(n=>n.id===(e.source_id===s.id?e.target_id:e.source_id))?.title||'Unknown')} <button data-remove-edge="${e.id}">Remove</button></article>`).join('')||'<div class="empty">No relationships yet.</div>'}</div><h3 style="margin-top:22px">Add relationship</h3><form id="edge-form" class="row"><select id="edge-target" aria-label="Target session">${state.sessions.filter(n=>n.id!==s.id).map(n=>`<option value="${n.id}">${escapeHtml(n.title)}</option>`).join('')}</select><select id="edge-type" aria-label="Relationship type"><option>PARENT_OF</option><option>SIBLING_OF</option><option>DEPENDS_ON</option><option>RELATED_TO</option></select><button>Add</button></form>`);
+    $('edge-form').onsubmit=e=>{e.preventDefault();action('/api/graph/relationships','POST',{source_id:s.id,target_id:$('edge-target').value,type:$('edge-type').value});};
+    content.querySelectorAll('[data-remove-edge]').forEach(b=>b.onclick=()=>action(`/api/graph/relationships/${b.dataset.removeEdge}`,'DELETE'));
+  } else if(state.tab==='Schedule') {
+    const sch=await api(`/api/sessions/${s.id}/schedule`);
+    if(generation!==renderGeneration)return;
+    setContent(content,`<form id="schedule-form"><div class="row"><div><label for="expression">Cron expression</label><input id="expression" value="${escapeHtml(sch?.expression||'0 9 * * *')}" required></div><div><label for="timezone">Timezone</label><input id="timezone" value="${escapeHtml(sch?.timezone||'UTC')}" required></div></div><label><input id="schedule-enabled" type="checkbox" style="width:auto" ${sch?.enabled!==0?'checked':''}> Enabled</label><button class="primary">Save schedule</button></form><p class="subtle">Next due: ${escapeHtml(sch?.next_due||'Not scheduled')}<br>Last due: ${escapeHtml(sch?.last_due||'Never')}<br>Last started: ${escapeHtml(sch?.last_started||'Never')}<br>Last finished: ${escapeHtml(sch?.last_finished||'Never')}<br>Last outcome: ${escapeHtml(sch?.last_outcome||'None')}</p>`);
+    $('schedule-form').onsubmit=e=>{e.preventDefault();action(`/api/sessions/${s.id}/schedule`,'PUT',{expression:$('expression').value,timezone:$('timezone').value,enabled:$('schedule-enabled').checked});};
+  } else if(state.tab==='Activity'||state.tab==='Logs') {
+    const events=await api(`/api/sessions/${s.id}/events`);
+    if(generation!==renderGeneration)return;
+    setContent(content,`${tab==='Logs'?'<button id="export-logs">Export JSONL</button>':''}<div class="small-list">${events.length?events.map(ev=>`<article><div class="subtle">${escapeHtml(ev.created_at)} · ${escapeHtml(ev.type)}</div>${tab==='Logs'?`<pre>${escapeHtml(ev.payload)}</pre>`:''}</article>`).join(''):'<div class="empty">No activity.</div>'}</div>`);
+    if(tab==='Logs')$('export-logs').onclick=()=>{const blob=new Blob([events.map(e=>JSON.stringify(e)).join('\n')+'\n'],{type:'application/x-ndjson'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`${s.id}-events.jsonl`;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);};
+  } else if(state.tab==='Requests') {
+    const [queue,approvals,requests,inbox]=await Promise.all([api(`/api/sessions/${s.id}/queue`),api('/api/approvals'),api(`/api/sessions/${s.id}/requests`),api(`/api/sessions/${s.id}/inbox`)]);
+    if(generation!==renderGeneration)return;
+    setContent(content,`<h3>Queue</h3><div class="small-list">${queue.filter(w=>w.status==='queued').map(w=>`<article>${escapeHtml(w.source)}: ${escapeHtml(w.payload)} <button data-cancel="${w.id}">Cancel</button></article>`).join('')||'<div class="empty">No queued work.</div>'}</div><h3 style="margin-top:22px">Neighbor updates</h3><div class="small-list">${inbox.map(u=>`<article>${escapeHtml(u.title)} · revision ${u.revision}<p>${escapeHtml(u.summary)}</p><small>Delivered through revision ${u.delivered_revision}</small></article>`).join('')||'<div class="empty">No new neighbor updates.</div>'}</div><h3 style="margin-top:22px">Agent requests</h3><div class="small-list">${requests.map(r=>`<article>${escapeHtml(r.status)} · ${escapeHtml(r.question)}${r.reply?`<p>${escapeHtml(r.reply)}</p>`:''}</article>`).join('')||'<div class="empty">No agent requests.</div>'}</div><h3 style="margin-top:22px">Approvals</h3><div class="small-list">${approvals.filter(a=>a.thread_id===s.thread_id).map(a=>`<article>${escapeHtml(a.method)}<pre>${escapeHtml(a.params)}</pre>${['item/permissions/requestApproval','item/commandExecution/requestApproval','item/fileChange/requestApproval','execCommandApproval','applyPatchApproval'].includes(a.method)?`<button data-approval="${a.id}" data-decision="accept">Approve</button> <button data-approval="${a.id}" data-decision="decline">Decline</button>`:'Specialized response required'}</article>`).join('')||'<div class="empty">No approvals pending.</div>'}</div>`);
+    content.querySelectorAll('[data-cancel]').forEach(b=>b.onclick=()=>action(`/api/work-items/${b.dataset.cancel}`,'DELETE'));
+    content.querySelectorAll('[data-approval]').forEach(b=>b.onclick=()=>action(`/api/approvals/${b.dataset.approval}/resolve`,'POST',{decision:b.dataset.decision}));
+  }
+}
+function render(){renderHeader();renderGraph();renderList();renderInspector().catch(e=>error(e.message));}
+async function refresh(){try{const [status,graph]=await Promise.all([api('/api/controller/status'),api('/api/graph')]); state.connected=true;state.status=status;state.sessions=graph.nodes;state.edges=graph.edges;if(state.selected&&!state.sessions.some(s=>s.id===state.selected))state.selected=null;render();}catch(e){const wasConnected=state.connected;state.connected=false;renderHeader();if(wasConnected)error(e.message);}}
+$('pause').onclick=()=>action(`/api/controller/${state.status?.paused?'resume':'pause'}`);
+$('stop-all').onclick=()=>action('/api/controller/stop-all');
+$('search').oninput=renderList;
+$('edge-filter').onchange=()=>{graphSignature='';renderGraph();};
+$('zoom-in').onclick=()=>zoomGraph(.8);$('zoom-out').onclick=()=>zoomGraph(1.25);$('zoom-reset').onclick=()=>{graphView={x:0,y:0,w:500,h:310};applyGraphView();};
+$('graph').addEventListener('wheel',e=>{e.preventDefault();zoomGraph(e.deltaY>0?1.1:.9);},{passive:false});
+let dragging=null;$('graph').addEventListener('pointerdown',e=>{if(e.target!==$('graph'))return;dragging={x:e.clientX,y:e.clientY,view:{...graphView}};$('graph').setPointerCapture(e.pointerId);});$('graph').addEventListener('pointermove',e=>{if(!dragging)return;const box=$('graph').getBoundingClientRect();graphView.x=dragging.view.x-(e.clientX-dragging.x)*graphView.w/box.width;graphView.y=dragging.view.y-(e.clientY-dragging.y)*graphView.h/box.height;applyGraphView();});$('graph').addEventListener('pointerup',()=>dragging=null);
+$('new-session').onsubmit=async e=>{e.preventDefault();try{const result=await api('/api/sessions','POST',{title:$('new-title').value,objective:$('new-objective').value,cwd:$('new-cwd').value});state.selected=result.id;state.tab='Chat';$('new-title').value='';$('new-objective').value='';await refresh();}catch(err){error(err.message);}};
+renderHeader();renderGraph();renderList();refresh();setInterval(refresh,2000);
+function updateClock(){$('clock').textContent=new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});}updateClock();setInterval(updateClock,30000);
+</script>
+</body>
+</html>
