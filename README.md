@@ -20,6 +20,8 @@ Open `http://127.0.0.1:8765`. Create a session with an absolute working director
 
 To use the Python-defined NiceGUI interface instead, run `python3 -m app.nicegui_main --port 8765 --data ./data` after installing the `ui` extra. The two entry points use the same database and must not run simultaneously.
 
+If a turn waits for Codex approval, review the proposed file diffs in the session's Chat or Requests tab. The terminal fallback `python3 -m app.approval_review --data ./data` shows pending changes and asks before sending an approve or decline decision to the running service.
+
 ## Test
 
 ```sh
