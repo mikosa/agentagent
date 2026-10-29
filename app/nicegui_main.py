@@ -538,9 +538,8 @@ def main():
                     live["chat_scroll"].scroll_to(percent=1.0)
 
         ui.timer(1.5, lambda: update(False))
-        await ui.context.client.connected()
-        if live["chat_scroll"]:
-            live["chat_scroll"].scroll_to(percent=1.0)
+        ui.context.client.on_connect(lambda: live["chat_scroll"] and
+                                     live["chat_scroll"].scroll_to(percent=1.0))
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ui.run(host=args.host, port=args.port, title="Agent Controller", reload=False, dark=True)
