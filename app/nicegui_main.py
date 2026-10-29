@@ -14,6 +14,7 @@ from .codex_rpc import start_codex
 from .controller import Controller
 from .main import scheduler, trusted_origin
 from .ui.graph import graph_options
+from .ui.approvals import matching_file_changes
 from .ui.history import HistoryPager, display_items
 
 
@@ -161,6 +162,19 @@ def main():
             except Exception as exc:
                 show_error(exc)
 
+        def render_approval_details(approval):
+            params = json.loads(approval["params"])
+            turn = controller.db.one("SELECT id FROM turns WHERE codex_turn_id=?", (params.get("turnId"),))
+            items = controller.turn_items(turn["id"]) if turn else []
+            changes = matching_file_changes(params.get("itemId"), items)
+            if changes:
+                ui.label(f"Proposed changes to {len(changes)} files")
+                for change in changes:
+                    with ui.expansion(f"{change.get('kind', {}).get('type', 'change')} · {change.get('path', 'unknown path')}"):
+                        ui.code(change.get("diff", "No diff supplied"))
+            else:
+                ui.code(approval["params"])
+
         def choose(session_id):
             selected["id"] = session_id
             selected["tab"] = "Chat"
@@ -221,7 +235,7 @@ def main():
                         selected["signature"] = None
                         ui.label("Create or select a session to inspect its work.").classes("operator-muted")
                         return
-                    active = next((t for t in controller.turns(sid) if t["status"] in ("running", "interrupt_requested")), None)
+                    active = next((t for t in controller.turns(sid) if t["status"] in ("running", "waiting_for_approval", "interrupt_requested")), None)
                     pending_approvals = controller.db.one("SELECT count(*) AS n FROM approvals WHERE thread_id=? AND decision IS NULL",
                                                           (session["thread_id"],))["n"]
                     pending_work = controller.db.one("SELECT count(*) AS n FROM work_items WHERE session_id=? AND status='queued'", (sid,))["n"]
@@ -260,6 +274,27 @@ def main():
                         if tab == "Chat":
                             @ui.refreshable
                             def chat_messages():
+                                stale = controller.db.many("SELECT id,method,created_at FROM approvals WHERE thread_id=? AND decision='stale_after_restart' ORDER BY rowid",
+                                                           (session["thread_id"],))
+                                if stale and session["status"] == "held":
+                                    with ui.card().classes("w-full operator-panel border border-amber-400"):
+                                        ui.label("Approval connection was lost on restart").classes("text-lg font-semibold")
+                                        ui.label("This turn is held for reconciliation. Its old approval cannot be answered through this process.")
+                                approvals = controller.db.many("SELECT * FROM approvals WHERE thread_id=? AND decision IS NULL ORDER BY rowid",
+                                                               (session["thread_id"],))
+                                for approval in approvals:
+                                    with ui.card().classes("w-full operator-panel border border-amber-400"):
+                                        ui.label("Waiting for your approval").classes("text-lg font-semibold")
+                                        ui.label(approval["method"])
+                                        render_approval_details(approval)
+                                        if approval["method"] in SIMPLE_APPROVAL_METHODS:
+                                            with ui.row():
+                                                ui.button("Approve", on_click=lambda aid=approval["id"]:
+                                                          act(controller.resolve_approval(aid, "accept")))
+                                                ui.button("Decline", on_click=lambda aid=approval["id"]:
+                                                          act(controller.resolve_approval(aid, "decline"))).props("color=negative")
+                                        else:
+                                            ui.label("This approval needs a specialized response.").classes("operator-muted")
                                 if sid not in history_pagers:
                                     history_pagers[sid] = HistoryPager(lambda before: controller.turns_page(sid, 50, before))
                                 pager = history_pagers[sid]
@@ -383,7 +418,7 @@ def main():
                             for approval in controller.db.many("SELECT * FROM approvals WHERE thread_id=? AND decision IS NULL ORDER BY rowid", (session["thread_id"],)):
                                 with ui.card().classes("w-full operator-panel"):
                                     ui.label(f"Approval · {approval['method']}")
-                                    ui.code(approval["params"])
+                                    render_approval_details(approval)
                                     if approval["method"] in SIMPLE_APPROVAL_METHODS:
                                         ui.button("Approve", on_click=lambda aid=approval["id"]:
                                                   act(controller.resolve_approval(aid, "accept")))
@@ -398,12 +433,12 @@ def main():
 
         def update(refresh_inspector=True):
             status = controller.status()
-            status_label.set_text(f"{'Paused' if status['paused'] else 'Running'} · {status['running']} active · {status['queued']} queued")
+            status_label.set_text(f"{'Paused' if status['paused'] else 'Running'} · {status['running']} active · {status['queued']} queued · {status['pending_approvals']} approvals")
             refresh_chart(chart, graph_options(controller.sessions(), controller.graph()))
             session_list.refresh()
             sid = selected["id"]
             session = controller.session(sid) if sid else None
-            active = next((t for t in controller.turns(sid) if t["status"] in ("running", "interrupt_requested")), None) if session else None
+            active = next((t for t in controller.turns(sid) if t["status"] in ("running", "waiting_for_approval", "interrupt_requested")), None) if session else None
             pending_approvals = controller.db.one("SELECT count(*) AS n FROM approvals WHERE thread_id=? AND decision IS NULL",
                                                   (session["thread_id"],))["n"] if session else 0
             pending_work = controller.db.one("SELECT count(*) AS n FROM work_items WHERE session_id=? AND status='queued'",

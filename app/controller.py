@@ -51,11 +51,13 @@ class Controller:
                 WHERE target.status!='archived' AND neighbor.status!='archived'
                     AND neighbor.summary_revision>coalesce(d.revision,0)""")["n"]
         return {"paused": bool(state["paused"]), "revision": state["revision"],
-                "running": counts.get("running", 0) + counts.get("starting", 0) + counts.get("interrupt_requested", 0),
+                "running": counts.get("running", 0) + counts.get("starting", 0) + counts.get("interrupt_requested", 0) + counts.get("waiting_for_approval", 0),
                 "queued": self.db.one("SELECT count(*) AS n FROM work_items WHERE status='queued'")["n"],
                 "reflecting": self.db.one("SELECT count(*) AS n FROM reflections WHERE status IN ('starting','running','interrupt_requested')")["n"],
                 "held": self.db.one("SELECT count(*) AS n FROM sessions WHERE held=1")["n"],
                 "pending_requests": self.db.one("SELECT count(*) AS n FROM agent_requests WHERE status='queued'")["n"],
+                "pending_approvals": self.db.one("SELECT count(*) AS n FROM approvals WHERE decision IS NULL")["n"],
+                "stale_approvals": self.db.one("SELECT count(*) AS n FROM approvals WHERE decision='stale_after_restart'")["n"],
                 "unread_updates": unread,
                 "failures": counts.get("failed", 0) + counts.get("interrupt_failed", 0)}
 
@@ -67,8 +69,9 @@ class Controller:
 
     def recover_inflight(self):
         """Fail closed after process loss; operator must inspect before resuming."""
-        active = self.db.many("SELECT * FROM turns WHERE status IN ('starting','running','interrupt_requested')")
+        active = self.db.many("SELECT * FROM turns WHERE status IN ('starting','running','waiting_for_approval','interrupt_requested')")
         reflections = self.db.many("SELECT * FROM reflections WHERE status IN ('starting','running','interrupt_requested')")
+        approvals = self.db.many("SELECT * FROM approvals WHERE decision IS NULL")
         with self.db.transaction():
             for turn in active:
                 self.db.conn.execute("UPDATE turns SET status='reconcile_required' WHERE id=?", (turn["id"],))
@@ -77,6 +80,11 @@ class Controller:
             for reflection in reflections:
                 self.db.conn.execute("UPDATE reflections SET status='reconcile_required' WHERE id=?", (reflection["id"],))
                 self.db.event("reflection.reconcile_required", "controller", reflection["id"])
+            for approval in approvals:
+                self.db.conn.execute("UPDATE approvals SET decision='stale_after_restart' WHERE id=?", (approval["id"],))
+                session = self.db.one("SELECT id FROM sessions WHERE thread_id=?", (approval["thread_id"],))
+                self.db.event("approval.stale_after_restart", "controller", session["id"] if session else approval["thread_id"],
+                              {"approval_id": approval["id"]})
         return len(active) + len(reflections)
 
     async def reconcile_inflight(self):
@@ -316,7 +324,7 @@ class Controller:
             if self.status()["paused"]:
                 return False
             item = self.db.one("""SELECT w.* FROM work_items w JOIN sessions s ON s.id=w.session_id
-                WHERE w.status='queued' AND s.held=0 AND s.status NOT IN ('running','reflecting','splitting','archived')
+                WHERE w.status='queued' AND s.held=0 AND s.status NOT IN ('running','waiting_for_approval','reflecting','splitting','archived')
                 ORDER BY w.priority, w.created_at, w.rowid LIMIT 1""")
             if not item:
                 return False
@@ -356,7 +364,7 @@ class Controller:
 
     async def stop_turn(self, turn_id):
         t = self.db.one("SELECT * FROM turns WHERE id=?", (turn_id,))
-        if not t or t["status"] not in ("running", "interrupt_requested"):
+        if not t or t["status"] not in ("running", "waiting_for_approval", "interrupt_requested"):
             raise ValueError("turn is not running")
         if t["status"] == "interrupt_requested":
             return
@@ -375,7 +383,7 @@ class Controller:
     async def stop_all(self):
         await self.pause()
         errors = []
-        active = self.db.many("SELECT id FROM turns WHERE status='running'")
+        active = self.db.many("SELECT id FROM turns WHERE status IN ('running','waiting_for_approval')")
         for turn in active:
             try:
                 await self.stop_turn(turn["id"])
@@ -409,7 +417,7 @@ class Controller:
         session = self.session(session_id)
         if not session:
             raise KeyError(session_id)
-        if session["status"] in ("running", "reflecting", "splitting"):
+        if session["status"] in ("running", "waiting_for_approval", "reflecting", "splitting"):
             raise ValueError("stop the active turn before archiving")
         if self.db.one("SELECT id FROM work_items WHERE session_id=? AND status IN ('claimed','running','reconcile_required') LIMIT 1",
                        (session_id,)):
@@ -430,7 +438,7 @@ class Controller:
     def resume_session(self, session_id):
         if self.session(session_id)["status"] == "archived":
             raise ValueError("archived sessions cannot resume")
-        active = self.db.one("SELECT id FROM turns WHERE session_id=? AND status IN ('starting','running','interrupt_requested','interrupt_failed','reconcile_required')", (session_id,))
+        active = self.db.one("SELECT id FROM turns WHERE session_id=? AND status IN ('starting','running','waiting_for_approval','interrupt_requested','interrupt_failed','reconcile_required')", (session_id,))
         if active:
             raise ValueError("wait for the active turn to finish or reconcile before resuming")
         with self.db.transaction():
@@ -611,9 +619,16 @@ class Controller:
 
     async def record_approval(self, rpc_id, method, params):
         approval_id = uid()
-        self.db.conn.execute("INSERT INTO approvals VALUES (?,?,?,?,?,?,?)",
-                             (approval_id, str(rpc_id), params.get("threadId"), method, json.dumps(params), None, now()))
-        self.db.event("approval.requested", "codex", params.get("threadId"), {"approval_id": approval_id, "method": method})
+        thread_id = params.get("threadId")
+        turn = self.db.one("SELECT * FROM turns WHERE codex_turn_id=?", (params.get("turnId"),)) if params.get("turnId") else None
+        with self.db.transaction():
+            self.db.conn.execute("INSERT INTO approvals VALUES (?,?,?,?,?,?,?)",
+                                 (approval_id, str(rpc_id), thread_id, method, json.dumps(params), None, now()))
+            if turn and turn["status"] == "running":
+                self.db.conn.execute("UPDATE turns SET status='waiting_for_approval' WHERE id=?", (turn["id"],))
+                self.db.conn.execute("UPDATE sessions SET status='waiting_for_approval' WHERE id=?", (turn["session_id"],))
+            self.db.event("approval.requested", "codex", turn["session_id"] if turn else thread_id,
+                          {"approval_id": approval_id, "method": method, "turn_id": turn["id"] if turn else None})
         return approval_id
 
     async def resolve_approval(self, approval_id, decision):
@@ -631,8 +646,17 @@ class Controller:
         else:
             raise ValueError("this approval type requires a specialized response")
         await self.codex.respond(int(approval["rpc_id"]), result)
-        self.db.conn.execute("UPDATE approvals SET decision=? WHERE id=?", (decision, approval_id))
-        self.db.event("approval.resolved", "user", approval["thread_id"], {"approval_id": approval_id, "decision": decision})
+        turn_id = json.loads(approval["params"]).get("turnId")
+        turn = self.db.one("SELECT * FROM turns WHERE codex_turn_id=?", (turn_id,)) if turn_id else None
+        with self.db.transaction():
+            self.db.conn.execute("UPDATE approvals SET decision=? WHERE id=?", (decision, approval_id))
+            still_pending = self.db.one("SELECT id FROM approvals WHERE thread_id=? AND decision IS NULL LIMIT 1",
+                                        (approval["thread_id"],))
+            if turn and turn["status"] == "waiting_for_approval" and not still_pending:
+                self.db.conn.execute("UPDATE turns SET status='running' WHERE id=?", (turn["id"],))
+                self.db.conn.execute("UPDATE sessions SET status='running' WHERE id=?", (turn["session_id"],))
+            self.db.event("approval.resolved", "user", turn["session_id"] if turn else approval["thread_id"],
+                          {"approval_id": approval_id, "decision": decision})
 
     def pending_reflections(self):
         return self.db.many("SELECT * FROM reflections WHERE status='queued' ORDER BY rowid")
