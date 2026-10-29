@@ -1,5 +1,49 @@
 """Readable chat items built from durable Codex notifications."""
 
+import re
+
+
+def work_source_label(source):
+    """Name the origin of a turn's submitted prompt."""
+    return {
+        "manual": ("You", "user"),
+        "agent": ("Another agent", "agent"),
+        "cron": ("Schedule", "activity"),
+    }.get(source, (str(source or "Prompt").replace("_", " ").title(), "activity"))
+
+
+def chat_item_presentation(item, commands=None):
+    """Return a readable source, visual category, and short detail for an item."""
+    kind = item["type"]
+    payload = item["payload"]
+    if kind == "agentMessage":
+        return "Agent", "agent", ""
+    if kind == "userMessage":
+        return "You", "user", ""
+    if kind == "commandExecution":
+        command = payload.get("command") or ""
+        script_path = payload.get("scriptPath") or ""
+        is_python = script_path.endswith(".py") or bool(re.search(r"\bpython(?:3(?:\.\d+)?)?\b", command))
+        return ("Python script" if is_python else "Tool"), "tool", command.splitlines()[0][:120]
+    if kind == "item/commandExecution/outputDelta":
+        command = (commands or {}).get(payload.get("itemId"))
+        if command and chat_item_presentation({"type": "commandExecution", "payload": command})[0] == "Python script":
+            return "Python output", "tool", ""
+        return "Tool output", "tool", ""
+    if kind == "webSearch":
+        return "Web search", "tool", payload.get("query") or ""
+    if kind == "fileChange":
+        return "File change", "tool", ""
+    return "Agent activity", "activity", kind
+
+
+def user_message_text(payload):
+    content = payload.get("content") or []
+    if isinstance(content, list):
+        return "\n".join(part["text"] for part in content
+                         if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str))
+    return payload.get("text") or ""
+
 
 def conversation_revision(db, session_id):
     """Return the last journal entry affecting a session's conversation."""
@@ -62,6 +106,8 @@ def display_items(items):
             partial_by_id[message_id]["text"] += payload.get("delta", "")
         elif item["type"] == "agentMessage":
             result.append({**item, "text": payload.get("text", ""), "partial": False})
+        elif item["type"] == "userMessage":
+            result.append({**item, "text": user_message_text(payload), "partial": False})
         else:
             result.append({**item, "text": None, "partial": False})
     return result

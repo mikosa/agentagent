@@ -1,5 +1,5 @@
 from app.db import Database
-from app.ui.history import HistoryPager, conversation_revision, display_items
+from app.ui.history import HistoryPager, chat_item_presentation, conversation_revision, display_items, work_source_label
 
 
 def test_message_deltas_are_combined_until_final_item_arrives():
@@ -26,6 +26,27 @@ def test_non_message_items_stay_inspectable():
     command = {"type": "commandExecution", "item_id": "command-1", "created_at": "t1",
                "payload": {"command": "pytest"}}
     assert display_items([command]) == [{**command, "text": None, "partial": False}]
+
+
+def test_chat_entries_identify_people_agents_and_script_output():
+    assert work_source_label("manual") == ("You", "user")
+    assert work_source_label("agent") == ("Another agent", "agent")
+    assert work_source_label("cron") == ("Schedule", "activity")
+    assert chat_item_presentation({"type": "agentMessage", "payload": {}}) == ("Agent", "agent", "")
+    assert chat_item_presentation({"type": "userMessage", "payload": {}}) == ("You", "user", "")
+    assert chat_item_presentation({"type": "commandExecution", "payload": {"command": "python3 report.py"}}) == ("Python script", "tool", "python3 report.py")
+    assert chat_item_presentation({"type": "commandExecution", "payload": {"command": "ls -la"}}) == ("Tool", "tool", "ls -la")
+    assert chat_item_presentation({"type": "item/commandExecution/outputDelta", "payload": {"delta": "ok"}}) == ("Tool output", "tool", "")
+    assert chat_item_presentation(
+        {"type": "item/commandExecution/outputDelta", "payload": {"itemId": "run-1", "delta": "ok"}},
+        {"run-1": {"command": "python3 report.py"}},
+    ) == ("Python output", "tool", "")
+
+
+def test_user_message_content_is_readable():
+    item = {"type": "userMessage", "item_id": "u1", "payload": {
+        "content": [{"type": "text", "text": "Please run the report"}]}}
+    assert display_items([item])[0]["text"] == "Please run the report"
 
 
 def test_history_pager_loads_older_turns_and_newest_updates():

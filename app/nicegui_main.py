@@ -15,7 +15,7 @@ from .controller import Controller
 from .main import scheduler, trusted_origin
 from .ui.graph import graph_options
 from .ui.approvals import matching_file_changes
-from .ui.history import HistoryPager, conversation_revision, display_items
+from .ui.history import HistoryPager, chat_item_presentation, conversation_revision, display_items, work_source_label
 
 
 SIMPLE_APPROVAL_METHODS = {
@@ -161,6 +161,18 @@ def main():
           .operator-turn { background:var(--surface); border:1px solid var(--line);
                            border-radius:12px; padding:16px; max-width:75ch; width:100%; }
           .operator-message { line-height:1.55; overflow-wrap:anywhere; white-space:pre-wrap; }
+          .operator-entry { width:100%; max-width:100%; border:1px solid; border-radius:10px;
+                            padding:12px 14px; }
+          .operator-entry-user { background:#1b3440; border-color:#426371; }
+          .operator-entry-agent { background:#1e332b; border-color:#456950; }
+          .operator-entry-tool { background:#332e23; border-color:#77623d; }
+          .operator-entry-activity { background:#243135; border-color:#45575b; }
+          .operator-role { font-size:.75rem; font-weight:700; letter-spacing:.03em;
+                           text-transform:uppercase; }
+          .operator-entry-user .operator-role { color:#a9d8ea; }
+          .operator-entry-agent .operator-role { color:#b8ebc8; }
+          .operator-entry-tool .operator-role { color:#f3d89b; }
+          .operator-entry-activity .operator-role { color:#c4d6d6; }
           .operator-code { max-width:100%; overflow-x:auto; }
           .operator-compose { background:var(--surface); border:1px solid var(--line);
                               border-radius:14px; padding:12px; }
@@ -368,24 +380,35 @@ def main():
                                               (pager.load_older(), chat_messages.refresh())).props("flat no-caps").classes("self-center")
                                 for turn in pager.rows():
                                     work = controller.work_item(turn["work_item_id"])
+                                    source_label, source_kind = work_source_label(work["source"] if work else None)
                                     with ui.column().classes("operator-turn"):
                                         with ui.row().classes("w-full items-center justify-between gap-2"):
-                                            ui.label(f"{work['source'] if work else 'prompt'} · {turn['status']}").classes("font-semibold text-[#a5e0bf]")
+                                            ui.label(f"{source_label} · {turn['status']}").classes("font-semibold text-[#a5e0bf]")
                                             ui.label(turn["started_at"] or "pending").classes("operator-muted text-xs")
                                         if work and work["payload"]:
-                                            with ui.expansion("Prompt", value=expanded.get((sid, (turn["id"], "prompt")), False),
-                                                              on_value_change=lambda e, key=(turn["id"], "prompt"): remember_expansion(key, e)).classes("w-full"):
+                                            with ui.expansion(f"{source_label} · submitted prompt", value=expanded.get((sid, (turn["id"], "prompt")), False),
+                                                              on_value_change=lambda e, key=(turn["id"], "prompt"): remember_expansion(key, e)).classes(f"operator-entry operator-entry-{source_kind}"):
                                                 ui.label(work["payload"]).classes("operator-message")
-                                        for item in display_items(controller.turn_items(turn["id"])):
+                                        items = display_items(controller.turn_items(turn["id"]))
+                                        commands = {entry["payload"].get("id"): entry["payload"] for entry in items
+                                                    if entry["type"] == "commandExecution" and entry["payload"].get("id")}
+                                        for item in items:
                                             payload = item["payload"]
-                                            if item["type"] == "agentMessage" and item["text"]:
-                                                ui.label(item["text"] + (" ▍" if item["partial"] else "")).classes("operator-message")
+                                            role, kind, detail = chat_item_presentation(item, commands)
+                                            if item["type"] in ("agentMessage", "userMessage") and item["text"]:
+                                                with ui.column().classes(f"operator-entry operator-entry-{kind} gap-2"):
+                                                    ui.label(role).classes("operator-role")
+                                                    ui.label(item["text"] + (" ▍" if item["partial"] else "")).classes("operator-message")
                                             else:
                                                 key = (turn["id"], item["id"])
-                                                with ui.expansion(f"{item['type']} · {item['created_at']}",
+                                                heading = f"{role} · {detail}" if detail else role
+                                                with ui.expansion(heading,
                                                                   value=expanded.get((sid, key), False),
-                                                                  on_value_change=lambda e, key=key: remember_expansion(key, e)).classes("w-full"):
-                                                    ui.code(json.dumps(payload, indent=2)).classes("operator-code")
+                                                                  on_value_change=lambda e, key=key: remember_expansion(key, e)).classes(f"operator-entry operator-entry-{kind}"):
+                                                    if item["type"] == "item/commandExecution/outputDelta":
+                                                        ui.code(payload.get("delta", "")).classes("operator-code")
+                                                    else:
+                                                        ui.code(json.dumps(payload, indent=2)).classes("operator-code")
                                         reflection = controller.db.one("SELECT * FROM reflections WHERE worker_turn_id=?", (turn["id"],))
                                         if reflection:
                                             key = (turn["id"], "reflection")
