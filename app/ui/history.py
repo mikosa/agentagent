@@ -1,6 +1,12 @@
 """Readable chat items built from durable Codex notifications."""
 
 
+def conversation_revision(db, session_id):
+    """Return the last journal entry affecting a session's conversation."""
+    row = db.one("SELECT COALESCE(MAX(rowid), 0) AS revision FROM events WHERE entity_id=?", (session_id,))
+    return row["revision"]
+
+
 class HistoryPager:
     """Keep loaded local turns while fetching newer and older pages."""
 

@@ -11,13 +11,17 @@ from urllib.request import Request, urlopen
 from .ui.approvals import matching_file_changes
 
 
-def format_review(approval, changes):
+def format_review(approval, changes, command=None, reason=None):
     lines = [f"Approval: {approval['id']}", f"Type: {approval['method']}"]
+    if reason:
+        lines.append(f"Reason: {reason}")
     if changes:
         lines.append(f"Proposed file changes: {len(changes)}")
         for change in changes:
             lines.extend((f"\n{change.get('kind', {}).get('type', 'change')}: {change.get('path', 'unknown path')}",
                           change.get("diff", "No diff supplied")))
+    elif command:
+        lines.extend(("Proposed command:", command))
     else:
         lines.append("No file diff is stored for this approval. Review its metadata in the browser before deciding.")
     return "\n".join(lines)
@@ -55,7 +59,9 @@ def main():
     if len(matches) != 1:
         parser.error("multiple approvals are pending; pass --id to choose one")
     approval = matches[0]
-    print(format_review(approval, _changes(args.data / "controller.sqlite", approval)))
+    params = json.loads(approval["params"])
+    print(format_review(approval, _changes(args.data / "controller.sqlite", approval),
+                        command=params.get("command"), reason=params.get("reason")))
     if args.review_only:
         return
     choice = input("\nApprove, decline, or quit? [a/d/q] ").strip().lower()

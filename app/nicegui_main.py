@@ -15,7 +15,7 @@ from .controller import Controller
 from .main import scheduler, trusted_origin
 from .ui.graph import graph_options
 from .ui.approvals import matching_file_changes
-from .ui.history import HistoryPager, display_items
+from .ui.history import HistoryPager, conversation_revision, display_items
 
 
 SIMPLE_APPROVAL_METHODS = {
@@ -134,14 +134,45 @@ def main():
             ui.label("Agent Controller could not start").classes("text-xl font-bold")
             ui.label(str(exc))
             return
-        selected = {"id": None, "tab": "Chat", "signature": None, "drafts": {}}
-        live = {"chat_refresh": None}
+        sessions = controller.sessions()
+        selected = {"id": sessions[0]["id"] if sessions else None,
+                    "tab": "Chat", "signature": None, "drafts": {}}
+        live = {"chat_refresh": None, "chat_revision": None, "chat_scroll": None,
+                "scroll_percent": 1.0, "at_bottom": True}
         history_pagers = {}
+        expanded = {}
         ui.add_head_html("""<style>
+          :root { --surface:#18272b; --surface-raised:#203237; --line:#34494d;
+                  --muted:#b7cbca; --accent:#a5e0bf; }
           body { background:#10191d; color:#f2f6f4; }
-          .operator-panel { background:#18252a; border-radius:12px; padding:16px; }
-          .operator-muted { color:#b1c4c5; }
-          .operator-button { background:#a5e0bf; color:#10251a; }
+          .q-page-container { max-width:1600px; margin:auto; }
+          .operator-header { border-bottom:1px solid var(--line); gap:10px; }
+          .operator-panel { background:var(--surface); border-radius:14px; padding:18px; }
+          .operator-muted { color:var(--muted); }
+          .operator-button { background:var(--accent); color:#10251a; font-weight:700; }
+          .operator-sidebar { position:sticky; top:78px; }
+          .operator-graph { height:320px; }
+          .operator-sessions { max-height:30vh; overflow-y:auto; }
+          .operator-session { justify-content:flex-start; text-align:left; border-radius:9px; }
+          .operator-session:hover, .operator-session:focus-visible { background:var(--surface-raised); }
+          .operator-inspector { min-width:0; }
+          .operator-chat { background:#132126; border:1px solid var(--line); border-radius:14px; }
+          .operator-chat-scroll { height: min(43vh, 600px); min-height:260px; }
+          .operator-turn { background:var(--surface); border:1px solid var(--line);
+                           border-radius:12px; padding:16px; max-width:75ch; width:100%; }
+          .operator-message { line-height:1.55; overflow-wrap:anywhere; white-space:pre-wrap; }
+          .operator-code { max-width:100%; overflow-x:auto; }
+          .operator-compose { background:var(--surface); border:1px solid var(--line);
+                              border-radius:14px; padding:12px; }
+          .operator-compose .q-textarea textarea { min-height:56px; }
+          .q-btn:focus-visible, .q-tab:focus-visible, .q-expansion-item:focus-visible {
+            outline:2px solid var(--accent); outline-offset:2px; }
+          @media(max-width:800px) {
+            .operator-sidebar { position:static; }
+            .operator-graph { height:170px; }
+            .operator-chat-scroll { height:42vh; min-height:240px; }
+            .operator-header { justify-content:flex-start; }
+          }
         </style>""")
         ui.dark_mode().enable()
 
@@ -172,12 +203,20 @@ def main():
                 for change in changes:
                     with ui.expansion(f"{change.get('kind', {}).get('type', 'change')} · {change.get('path', 'unknown path')}"):
                         ui.code(change.get("diff", "No diff supplied"))
+            elif params.get("command"):
+                if params.get("reason"):
+                    ui.label(params["reason"])
+                ui.label(f"Working directory: {params.get('cwd') or 'unspecified'}")
+                ui.code(params["command"])
             else:
                 ui.code(approval["params"])
 
         def choose(session_id):
             selected["id"] = session_id
             selected["tab"] = "Chat"
+            live["chat_revision"] = None
+            live["scroll_percent"] = 1.0
+            live["at_bottom"] = True
             inspector.refresh()
 
         def on_graph_click(event):
@@ -185,27 +224,39 @@ def main():
             if node_id:
                 choose(node_id)
 
-        with ui.header().classes("items-center justify-between bg-[#142126]"):
-            ui.label("Agent Controller").classes("text-xl font-bold")
+        with ui.header().classes("operator-header items-center bg-[#142126] px-4 py-2"):
+            ui.label("Agent Controller").classes("text-xl font-bold mr-auto")
             status_label = ui.label()
             ui.button("Pause New Prompts", on_click=lambda: act(controller.pause())).props("outline")
             ui.button("Resume Dispatch", on_click=lambda: act(controller.resume())).props("outline")
             ui.button("Stop All Running", on_click=lambda: act(controller.stop_all())).props("outline color=negative")
 
-        with ui.row().classes("w-full items-start gap-4 p-4 flex-wrap"):
-            with ui.column().classes("w-full md:w-[36%] gap-3"):
+        @ui.refreshable
+        def approval_banner():
+            for approval in controller.db.many("SELECT * FROM approvals WHERE decision IS NULL ORDER BY rowid"):
+                session = controller.db.one("SELECT id,title FROM sessions WHERE thread_id=?", (approval["thread_id"],))
+                if session:
+                    with ui.row().classes("w-full items-center justify-between p-3 bg-amber-900"):
+                        ui.label(f"Approval needed for {session['title']}: {approval['method']}")
+                        ui.button("Review changes", on_click=lambda sid=session["id"]: choose(sid)).props("outline")
+
+        approval_banner()
+
+        with ui.row().classes("w-full items-start gap-5 p-4 flex-wrap"):
+            with ui.column().classes("operator-sidebar w-full md:w-[34%] gap-3"):
                 ui.label("Session graph").classes("text-lg font-semibold")
                 chart = ui.echart(graph_options(controller.sessions(), controller.graph()),
-                                  on_point_click=on_graph_click).classes("w-full h-80 operator-panel")
-                search = ui.input("Find a session").classes("w-full")
+                                  on_point_click=on_graph_click).classes("operator-graph w-full operator-panel")
+                search = ui.input("Find a session").props("outlined dense clearable").classes("w-full")
 
                 @ui.refreshable
                 def session_list():
                     query = (search.value or "").lower()
-                    for session in controller.sessions():
-                        if query in (session["title"] + " " + session["status"]).lower():
-                            ui.button(f"{session['title']} · {session['status']}",
-                                      on_click=lambda sid=session["id"]: choose(sid)).props("flat").classes("w-full")
+                    with ui.column().classes("operator-sessions w-full gap-1"):
+                        for session in controller.sessions():
+                            if query in (session["title"] + " " + session["status"]).lower():
+                                ui.button(f"{session['title']} · {session['status']}",
+                                          on_click=lambda sid=session["id"]: choose(sid)).props("flat no-caps").classes("operator-session w-full")
 
                 search.on("update:model-value", lambda _e: session_list.refresh())
                 session_list()
@@ -225,10 +276,11 @@ def main():
 
                     ui.button("Create session", on_click=create).classes("operator-button")
 
-            with ui.column().classes("w-full md:flex-1 min-w-[300px]"):
+            with ui.column().classes("operator-inspector w-full md:flex-1 min-w-[300px] gap-3"):
                 @ui.refreshable
                 def inspector():
                     live["chat_refresh"] = None
+                    live["chat_scroll"] = None
                     sid = selected["id"]
                     session = controller.session(sid) if sid else None
                     if not session:
@@ -242,7 +294,7 @@ def main():
                     selected["signature"] = (session["title"], session["status"], session["held"],
                                              active["id"] if active else None, pending_approvals, pending_work)
                     ui.label(session["title"]).classes("text-2xl font-semibold")
-                    ui.label(f"{session['status']} · {sid}").classes("operator-muted")
+                    ui.label(f"{session['status']} · {sid}").classes("operator-muted text-sm break-all")
                     with ui.row().classes("gap-2"):
                         if session["status"] == "archived":
                             ui.label("Archived sessions are read only.").classes("operator-muted")
@@ -272,6 +324,18 @@ def main():
                     def tab_body():
                         tab = selected["tab"]
                         if tab == "Chat":
+                            def remember_expansion(key, event):
+                                expanded[(sid, key)] = event.value
+
+                            def scroll_changed(event):
+                                live["scroll_percent"] = event.vertical_percentage
+                                live["at_bottom"] = event.vertical_percentage >= 0.95
+
+                            with ui.row().classes("w-full items-center justify-between"):
+                                ui.label("Conversation").classes("text-lg font-semibold")
+                                ui.button("Jump to latest", icon="south", on_click=lambda:
+                                          live["chat_scroll"].scroll_to(percent=1.0, duration=0.2)).props("flat no-caps")
+
                             @ui.refreshable
                             def chat_messages():
                                 stale = controller.db.many("SELECT id,method,created_at FROM approvals WHERE thread_id=? AND decision='stale_after_restart' ORDER BY rowid",
@@ -299,39 +363,57 @@ def main():
                                     history_pagers[sid] = HistoryPager(lambda before: controller.turns_page(sid, 50, before))
                                 pager = history_pagers[sid]
                                 pager.refresh_latest()
+                                if pager.has_more:
+                                    ui.button("Load older turns", on_click=lambda:
+                                              (pager.load_older(), chat_messages.refresh())).props("flat no-caps").classes("self-center")
                                 for turn in pager.rows():
                                     work = controller.work_item(turn["work_item_id"])
-                                    with ui.card().classes("w-full operator-panel"):
-                                        ui.label(f"{work['source'] if work else 'prompt'} · {turn['status']}").classes("operator-muted")
-                                        ui.label(f"Started {turn['started_at'] or 'pending'} · finished {turn['finished_at'] or 'in progress'}").classes("operator-muted")
-                                        ui.label(work["payload"] if work else "")
+                                    with ui.column().classes("operator-turn"):
+                                        with ui.row().classes("w-full items-center justify-between gap-2"):
+                                            ui.label(f"{work['source'] if work else 'prompt'} · {turn['status']}").classes("font-semibold text-[#a5e0bf]")
+                                            ui.label(turn["started_at"] or "pending").classes("operator-muted text-xs")
+                                        if work and work["payload"]:
+                                            with ui.expansion("Prompt", value=expanded.get((sid, (turn["id"], "prompt")), False),
+                                                              on_value_change=lambda e, key=(turn["id"], "prompt"): remember_expansion(key, e)).classes("w-full"):
+                                                ui.label(work["payload"]).classes("operator-message")
                                         for item in display_items(controller.turn_items(turn["id"])):
                                             payload = item["payload"]
                                             if item["type"] == "agentMessage" and item["text"]:
-                                                ui.label(item["text"] + (" ▍" if item["partial"] else "")).classes("whitespace-pre-wrap")
+                                                ui.label(item["text"] + (" ▍" if item["partial"] else "")).classes("operator-message")
                                             else:
-                                                with ui.expansion(f"{item['type']} · {item['created_at']}"):
-                                                    ui.code(json.dumps(payload, indent=2))
+                                                key = (turn["id"], item["id"])
+                                                with ui.expansion(f"{item['type']} · {item['created_at']}",
+                                                                  value=expanded.get((sid, key), False),
+                                                                  on_value_change=lambda e, key=key: remember_expansion(key, e)).classes("w-full"):
+                                                    ui.code(json.dumps(payload, indent=2)).classes("operator-code")
                                         reflection = controller.db.one("SELECT * FROM reflections WHERE worker_turn_id=?", (turn["id"],))
                                         if reflection:
-                                            with ui.expansion(f"Reflection · {reflection['status']}"):
-                                                ui.code(reflection["analysis"] or "Pending")
+                                            key = (turn["id"], "reflection")
+                                            with ui.expansion(f"Reflection · {reflection['status']}",
+                                                              value=expanded.get((sid, key), False),
+                                                              on_value_change=lambda e, key=key: remember_expansion(key, e)).classes("w-full"):
+                                                ui.code(reflection["analysis"] or "Pending").classes("operator-code")
                                                 for item in controller.reflection_items(reflection["id"]):
-                                                    with ui.expansion(f"{item['type']} · {item['created_at']}"):
-                                                        ui.code(json.dumps(item["payload"], indent=2))
+                                                    item_key = (turn["id"], "reflection", item["id"])
+                                                    with ui.expansion(f"{item['type']} · {item['created_at']}",
+                                                                      value=expanded.get((sid, item_key), False),
+                                                                      on_value_change=lambda e, key=item_key: remember_expansion(key, e)):
+                                                        ui.code(json.dumps(item["payload"], indent=2)).classes("operator-code")
                                                 if reflection["status"] in ("failed", "interrupt_failed"):
                                                     ui.button("Retry reflection", on_click=lambda rid=reflection["id"]:
                                                               apply_sync(lambda: controller.retry_reflection(rid)))
                                         if turn["status"] in ("failed", "interrupted"):
                                             ui.button("Retry turn", on_click=lambda tid=turn["id"]: act(controller.retry_turn(tid)))
-                                if pager.has_more:
-                                    ui.button("Load older turns", on_click=lambda:
-                                              (pager.load_older(), chat_messages.refresh())).props("outline")
-
-                            chat_messages()
+                            with ui.scroll_area(on_scroll=scroll_changed).classes("operator-chat operator-chat-scroll w-full") as chat_scroll:
+                                with ui.column().classes("w-full gap-3 p-4"):
+                                    chat_messages()
+                            live["chat_scroll"] = chat_scroll
                             live["chat_refresh"] = chat_messages.refresh
+                            live["chat_revision"] = conversation_revision(controller.db, sid)
+                            ui.timer(0.2, lambda: chat_scroll.scroll_to(percent=live["scroll_percent"]), once=True)
                             if session["status"] != "archived":
-                                prompt = ui.textarea("Prompt", value=selected["drafts"].get(sid, "")).classes("w-full")
+                                with ui.column().classes("operator-compose w-full gap-2"):
+                                    prompt = ui.textarea("Prompt", value=selected["drafts"].get(sid, "")).props("outlined autogrow").classes("w-full")
                                 prompt.on("update:model-value", lambda _e: selected["drafts"].__setitem__(sid, prompt.value))
 
                                 async def send_prompt():
@@ -342,7 +424,8 @@ def main():
                                     except Exception as exc:
                                         show_error(exc)
 
-                                ui.button("Send", on_click=send_prompt)
+                                with ui.row().classes("w-full justify-end"):
+                                    ui.button("Send prompt", icon="send", on_click=send_prompt).classes("operator-button")
                         elif tab == "Overview":
                             ui.label(session["objective"])
                             ui.label(session["summary"] or "No reflection yet").classes("operator-muted")
@@ -435,6 +518,7 @@ def main():
             status = controller.status()
             status_label.set_text(f"{'Paused' if status['paused'] else 'Running'} · {status['running']} active · {status['queued']} queued · {status['pending_approvals']} approvals")
             refresh_chart(chart, graph_options(controller.sessions(), controller.graph()))
+            approval_banner.refresh()
             session_list.refresh()
             sid = selected["id"]
             session = controller.session(sid) if sid else None
@@ -447,10 +531,16 @@ def main():
                          active["id"] if active else None, pending_approvals, pending_work) if session else None
             if refresh_inspector or signature != selected["signature"]:
                 inspector.refresh()
-            elif live["chat_refresh"]:
+            elif live["chat_refresh"] and conversation_revision(controller.db, sid) != live["chat_revision"]:
                 live["chat_refresh"]()
+                live["chat_revision"] = conversation_revision(controller.db, sid)
+                if live["at_bottom"] and live["chat_scroll"]:
+                    live["chat_scroll"].scroll_to(percent=1.0)
 
         ui.timer(1.5, lambda: update(False))
+        await ui.context.client.connected()
+        if live["chat_scroll"]:
+            live["chat_scroll"].scroll_to(percent=1.0)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ui.run(host=args.host, port=args.port, title="Agent Controller", reload=False, dark=True)

@@ -1,4 +1,5 @@
-from app.ui.history import HistoryPager, display_items
+from app.db import Database
+from app.ui.history import HistoryPager, conversation_revision, display_items
 
 
 def test_message_deltas_are_combined_until_final_item_arrives():
@@ -42,3 +43,15 @@ def test_history_pager_loads_older_turns_and_newest_updates():
     pages[None] = {"data": [{"id": "newest", "cursor": 4}, {"id": "new", "cursor": 3}], "next_cursor": 3}
     pager.refresh_latest()
     assert [row["id"] for row in pager.rows()] == ["old", "middle", "new", "newest"]
+
+
+def test_conversation_revision_only_changes_for_its_session(tmp_path):
+    db = Database(tmp_path / "controller.sqlite")
+    assert conversation_revision(db, "alpha") == 0
+    db.event("codex.item_started", "codex", "other")
+    assert conversation_revision(db, "alpha") == 0
+    db.event("codex.item_started", "codex", "alpha")
+    first = conversation_revision(db, "alpha")
+    assert first > 0
+    db.event("approval.requested", "codex", "alpha")
+    assert conversation_revision(db, "alpha") > first
